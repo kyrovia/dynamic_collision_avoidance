@@ -13,7 +13,7 @@ from ament_index_python.packages import (
     PackageNotFoundError,
     get_package_share_directory,
 )
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
@@ -28,6 +28,7 @@ MOTION_MODES = ("along", "perpendicular", "oblique")
 EEF_LINK = "tool0"
 PLANNING_FRAME = "base_link"
 MODEL_NAME = "red_sphere"
+OBSTACLE_POSE_TOPIC = "/obstacle/pose"
 SET_POSE_SERVICE = "/world/robot_sim/set_pose"
 # Keep oblique motion distinct from the other two modes.
 OBLIQUE_ANGLE_MIN_DEG = 10.0
@@ -204,6 +205,7 @@ class SphereMotionNode(Node):
         self._tf = Buffer()
         self._tf_listener = TransformListener(self._tf, self)
         self._collision = self.create_publisher(CollisionObject, "/collision_object", 10)
+        self._obstacle_pose = self.create_publisher(PoseStamped, OBSTACLE_POSE_TOPIC, 10)
         self._set_pose = self.create_client(SetEntityPose, SET_POSE_SERVICE)
         self.add_on_set_parameters_callback(self._on_parameters)
 
@@ -249,6 +251,7 @@ class SphereMotionNode(Node):
         dt = min(dt, 0.1)
         position = self._shuttle.step(float(self.get_parameter("speed").value) * dt)
         self._publish_collision(position)
+        self._publish_obstacle_pose(position)
         self._publish_gazebo(position)
 
     def _configure(self) -> bool:
@@ -331,6 +334,13 @@ class SphereMotionNode(Node):
         object_msg.primitive_poses.append(pose)
         object_msg.operation = CollisionObject.ADD
         self._collision.publish(object_msg)
+
+    def _publish_obstacle_pose(self, position: Vec3) -> None:
+        stamped = PoseStamped()
+        stamped.header.frame_id = str(self.get_parameter("planning_frame").value)
+        stamped.header.stamp = self.get_clock().now().to_msg()
+        stamped.pose = _pose(position)
+        self._obstacle_pose.publish(stamped)
 
     def _publish_gazebo(self, position: Vec3) -> None:
         if self._pose_busy or not self._set_pose.service_is_ready():
