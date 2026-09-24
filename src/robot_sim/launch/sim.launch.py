@@ -20,11 +20,17 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+SPHERE_MOTIONS = ("along", "perpendicular", "oblique")
+
 
 def launch_setup(context, *args, **kwargs):
     ur_type = LaunchConfiguration("ur_type")
     world = LaunchConfiguration("world")
     gui = LaunchConfiguration("gui")
+    sphere_motion = LaunchConfiguration("sphere_motion")
+    sphere_speed = LaunchConfiguration("sphere_speed")
+    sphere_along_tool_margin = LaunchConfiguration("sphere_along_tool_margin")
+    sphere_along_target_margin = LaunchConfiguration("sphere_along_target_margin")
     controllers_file = PathJoinSubstitution(
         [FindPackageShare("robot_sim"), "config", "ur_controllers.yaml"]
     )
@@ -112,8 +118,30 @@ def launch_setup(context, *args, **kwargs):
     clock_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
-        arguments=["/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock"],
+        arguments=[
+            "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
+            "/world/robot_sim/set_pose@ros_gz_interfaces/srv/SetEntityPose",
+        ],
         output="screen",
+    )
+    sphere_motion_node = Node(
+        package="robot_sim",
+        executable="sphere_motion_node",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "world": world,
+                "motion_mode": sphere_motion,
+                "speed": ParameterValue(sphere_speed, value_type=float),
+                "along_tool_margin": ParameterValue(
+                    sphere_along_tool_margin, value_type=float
+                ),
+                "along_target_margin": ParameterValue(
+                    sphere_along_target_margin, value_type=float
+                ),
+            }
+        ],
     )
 
     return [
@@ -124,6 +152,7 @@ def launch_setup(context, *args, **kwargs):
         gz_with_gui,
         gz_headless,
         clock_bridge,
+        sphere_motion_node,
     ]
 
 
@@ -162,6 +191,30 @@ def generate_launch_description() -> LaunchDescription:
                 "gui",
                 default_value="true",
                 description='Set to "false" to run headless.',
+            ),
+            DeclareLaunchArgument(
+                "sphere_motion",
+                default_value="along",
+                description=(
+                    "Red sphere motion relative to the home tool0-target line: "
+                    "along, perpendicular, or oblique."
+                ),
+                choices=list(SPHERE_MOTIONS),
+            ),
+            DeclareLaunchArgument(
+                "sphere_speed",
+                default_value="0.05",
+                description="Red sphere speed in m/s. Shared by every motion mode.",
+            ),
+            DeclareLaunchArgument(
+                "sphere_along_tool_margin",
+                default_value="0.45",
+                description="Along mode: closest center distance to home tool0, in meters.",
+            ),
+            DeclareLaunchArgument(
+                "sphere_along_target_margin",
+                default_value="0.15",
+                description="Along mode: closest center distance to target_pose, in meters.",
             ),
             OpaqueFunction(function=launch_setup),
         ]

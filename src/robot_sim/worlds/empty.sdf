@@ -30,7 +30,7 @@
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- Fixed obstacle inside the UR16e workspace, clear of the stretched home pose. -->
+    <!-- Starts on the home tool0 to target_pose line. sphere_motion_node teleports it. -->
     <model name="red_sphere">
       <static>true</static>
       <pose>0.35 0.21 0.63 0 0 0</pose>
