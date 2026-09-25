@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Computed-torque control: dynamics feedforward + joint PD for APF trajectories."""
 
+import math
 import sys
 
 import rclpy
@@ -17,6 +18,11 @@ from robot_sim.dynamics import ARM_JOINTS, ArmDynamics
 
 def _time_to_sec(stamp: Time) -> float:
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+
+def _wrap_joint_delta(delta: float) -> float:
+    """Shortest signed angle between two revolute joint readings."""
+    return (delta + math.pi) % (2.0 * math.pi) - math.pi
 
 
 class ComputedTorqueNode(Node):
@@ -52,6 +58,8 @@ class ComputedTorqueNode(Node):
         self._desired_velocities: list[float] | None = None
         self._prev_desired: list[float] | None = None
         self._prev_trajectory_stamp: RclTime | None = None
+        self._prev_measured: list[float] | None = None
+        self._prev_measured_time: RclTime | None = None
 
         latched = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -170,7 +178,7 @@ class ComputedTorqueNode(Node):
             return
 
         positions = [self._positions[name] for name in ARM_JOINTS]
-        velocities = [self._velocities.get(name, 0.0) for name in ARM_JOINTS]
+        velocities = self._measured_velocities(positions)
         desired = self._desired if self._desired is not None else positions
         desired_velocities = (
             self._desired_velocities
@@ -196,6 +204,28 @@ class ComputedTorqueNode(Node):
             return
 
         self._publish_effort(torques)
+
+    def _measured_velocities(self, positions: list[float]) -> list[float]:
+        """Differentiate wrapped joint positions; Gazebo /joint_states velocity lies near ±pi."""
+        now = self.get_clock().now()
+        if (
+            self._prev_measured is not None
+            and self._prev_measured_time is not None
+        ):
+            dt = (now - self._prev_measured_time).nanoseconds * 1e-9
+            if dt > 1e-6:
+                velocities = [
+                    _wrap_joint_delta(current - previous) / dt
+                    for current, previous in zip(positions, self._prev_measured)
+                ]
+            else:
+                velocities = [0.0] * len(ARM_JOINTS)
+        else:
+            velocities = [self._velocities.get(name, 0.0) for name in ARM_JOINTS]
+
+        self._prev_measured = list(positions)
+        self._prev_measured_time = now
+        return velocities
 
     def _publish_effort(self, torques: list[float]) -> None:
         message = Float64MultiArray()

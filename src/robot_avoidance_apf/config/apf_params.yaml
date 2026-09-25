@@ -9,7 +9,7 @@ apf_node:
     k_tan: 0.04
     k_ori: 1.0
     d0: 0.20
-    d_min: 0.03
+    d_min: 0.1
     v_max: 0.04
     omega_max: 0.3
 
@@ -17,5 +17,5 @@ apf_node:
     damping: 0.05
     control_rate: 50.0
     trajectory_horizon: 0.1
-    position_tolerance: 0.01
+    position_tolerance: 0.02
     orientation_tolerance: 0.05

@@ -207,16 +207,18 @@ class ApfNode(Node):
         damping = float(self.get_parameter("damping").value)
         # Step across the trajectory horizon so the arm tracks field speed.
         # A single control tick stretched over that horizon would move too slowly.
-        commanded = self._kinematics.integrate(
+        commanded, joint_velocities = self._kinematics.integrate(
             positions,
             (*command.linear, *command.angular),
             horizon,
             damping,
         )
-        self._publish(commanded)
+        self._publish(commanded, joint_velocities)
         speed = math.sqrt(sum(value * value for value in command.linear))
+        pos_err, ori_err = self._goal_errors(pose, orientation)
         self.get_logger().info(
-            f"clearance {command.clearance:.3f} m, speed {speed:.3f} m/s",
+            f"clearance {command.clearance:.3f} m, speed {speed:.3f} m/s, "
+            f"pos_err {pos_err:.4f} m, ori_err {ori_err:.4f} rad",
             throttle_duration_sec=2.0,
         )
 
@@ -239,23 +241,35 @@ class ApfNode(Node):
             omega_max=float(self.get_parameter("omega_max").value),
         )
 
+    def _goal_errors(
+        self,
+        position: tuple[float, float, float],
+        orientation: tuple[float, float, float, float],
+    ) -> tuple[float, float]:
+        offset = (
+            position[0] - self._goal_position[0],
+            position[1] - self._goal_position[1],
+            position[2] - self._goal_position[2],
+        )
+        pos_err = math.sqrt(offset[0] ** 2 + offset[1] ** 2 + offset[2] ** 2)
+        ori_err = orientation_angle(orientation, self._goal_orientation)
+        return pos_err, ori_err
+
     def _at_goal(
         self,
         position: tuple[float, float, float],
         orientation: tuple[float, float, float, float],
     ) -> bool:
-        error = (
-            position[0] - self._goal_position[0],
-            position[1] - self._goal_position[1],
-            position[2] - self._goal_position[2],
-        )
-        distance = math.sqrt(error[0] ** 2 + error[1] ** 2 + error[2] ** 2)
-        if distance > float(self.get_parameter("position_tolerance").value):
+        pos_err, ori_err = self._goal_errors(position, orientation)
+        if pos_err > float(self.get_parameter("position_tolerance").value):
             return False
-        angle = orientation_angle(orientation, self._goal_orientation)
-        return angle <= float(self.get_parameter("orientation_tolerance").value)
+        return ori_err <= float(self.get_parameter("orientation_tolerance").value)
 
-    def _publish(self, positions: list[float]) -> None:
+    def _publish(
+        self,
+        positions: list[float],
+        velocities: list[float] | None = None,
+    ) -> None:
         if self._kinematics is None:
             return
         horizon = float(self.get_parameter("trajectory_horizon").value)
@@ -264,6 +278,9 @@ class ApfNode(Node):
         message.joint_names = list(self._kinematics.joint_names)
         point = JointTrajectoryPoint()
         point.positions = positions
+        if velocities is None:
+            velocities = [0.0] * len(positions)
+        point.velocities = velocities
         point.time_from_start = duration_from_seconds(horizon)
         message.points.append(point)
         self._trajectory.publish(message)

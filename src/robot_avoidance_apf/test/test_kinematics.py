@@ -40,7 +40,7 @@ def test_zero_and_quarter_turn_match_the_joint_origin() -> None:
 def test_joint_limit_stops_further_motion() -> None:
     arm = ArmKinematics(URDF, "base", "tool")
     # Positive y velocity rotates joint1 positive, which the upper limit forbids.
-    held = arm.integrate([0.0], [0.0, 0.5, 0.0, 0.0, 0.0, 0.0], dt=1.0, damping=0.05)
+    held, _ = arm.integrate([0.0], [0.0, 0.5, 0.0, 0.0, 0.0, 0.0], dt=1.0, damping=0.05)
     assert held[0] == 0.0
 
 

@@ -35,14 +35,19 @@ class ArmKinematics:
         twist: Sequence[float],
         dt: float,
         damping: float,
-    ) -> list[float]:
+    ) -> tuple[list[float], list[float]]:
         jacobian = self._numeric_jacobian(positions)
         velocity = damped_least_squares(jacobian, np.asarray(twist, dtype=float), damping)
-        stepped = []
+        stepped: list[float] = []
+        effective: list[float] = []
         for index, position in enumerate(positions):
             lower, upper = self.limits[index]
-            stepped.append(min(upper, max(lower, position + float(velocity[index]) * dt)))
-        return stepped
+            next_position = min(
+                upper, max(lower, position + float(velocity[index]) * dt)
+            )
+            stepped.append(next_position)
+            effective.append((next_position - float(position)) / dt)
+        return stepped, effective
 
     def _numeric_jacobian(self, positions: Sequence[float]) -> np.ndarray:
         count = len(self.joint_names)
