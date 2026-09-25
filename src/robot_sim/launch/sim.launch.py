@@ -20,7 +20,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-SPHERE_MOTIONS = ("along", "perpendicular", "oblique")
+SPHERE_MOTIONS = ("static", "along", "perpendicular", "oblique")
 
 
 def launch_setup(context, *args, **kwargs):
@@ -194,10 +194,10 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "sphere_motion",
-                default_value="along",
+                default_value="static",
                 description=(
-                    "Red sphere motion relative to the home tool0-target line: "
-                    "along, perpendicular, or oblique."
+                    "Red sphere motion: static (default), or relative to the home "
+                    "tool0-target line as along, perpendicular, or oblique."
                 ),
                 choices=list(SPHERE_MOTIONS),
             ),

@@ -24,7 +24,7 @@ from tf2_ros import Buffer, TransformListener
 
 Vec3 = tuple[float, float, float]
 
-MOTION_MODES = ("along", "perpendicular", "oblique")
+MOTION_MODES = ("static", "along", "perpendicular", "oblique")
 EEF_LINK = "tool0"
 PLANNING_FRAME = "base_link"
 MODEL_NAME = "red_sphere"
@@ -186,7 +186,7 @@ class SphereMotionNode(Node):
     def __init__(self) -> None:
         super().__init__("sphere_motion_node")
         self.declare_parameter("world", str(world_path()))
-        self.declare_parameter("motion_mode", "along")
+        self.declare_parameter("motion_mode", "static")
         self.declare_parameter("speed", 0.05)
         self.declare_parameter("along_tool_margin", DEFAULT_ALONG_TOOL_MARGIN_M)
         self.declare_parameter("along_target_margin", DEFAULT_ALONG_TARGET_MARGIN_M)
@@ -199,6 +199,7 @@ class SphereMotionNode(Node):
         self._target: Vec3 | None = None
         self._tool0: Vec3 | None = None
         self._shuttle: Shuttle | None = None
+        self._configured = False
         self._last_time = None
         self._pose_busy = False
 
@@ -233,23 +234,32 @@ class SphereMotionNode(Node):
                 rebuild = True
         if rebuild:
             self._shuttle = None
+            self._configured = False
         return SetParametersResult(successful=True)
 
     def _on_timer(self) -> None:
         now = self.get_clock().now()
-        if self._shuttle is None and not self._configure():
+        if not self._configured and not self._configure():
             self._last_time = now
             return
-        if self._last_time is None or self._shuttle is None or self._sphere is None:
+        if self._last_time is None or self._sphere is None:
             self._last_time = now
             return
 
-        dt = (now - self._last_time).nanoseconds * 1e-9
+        mode = str(self.get_parameter("motion_mode").value)
+        if mode == "static":
+            position = self._sphere.center
+        else:
+            if self._shuttle is None:
+                self._last_time = now
+                return
+            dt = (now - self._last_time).nanoseconds * 1e-9
+            if dt <= 0.0:
+                return
+            dt = min(dt, 0.1)
+            position = self._shuttle.step(float(self.get_parameter("speed").value) * dt)
+
         self._last_time = now
-        if dt <= 0.0:
-            return
-        dt = min(dt, 0.1)
-        position = self._shuttle.step(float(self.get_parameter("speed").value) * dt)
         self._publish_collision(position)
         self._publish_obstacle_pose(position)
         self._publish_gazebo(position)
@@ -258,13 +268,18 @@ class SphereMotionNode(Node):
         if self._sphere is None or self._target is None:
             world = Path(self.get_parameter("world").get_parameter_value().string_value)
             self._sphere, self._target = load_scene(world)
+        mode = str(self.get_parameter("motion_mode").value)
+        if mode == "static":
+            self.get_logger().info("red sphere motion=static")
+            self._configured = True
+            return True
+
         if self._tool0 is None:
             looked_up = self._lookup_tool0()
             if looked_up is None:
                 return False
             self._tool0 = looked_up
 
-        mode = str(self.get_parameter("motion_mode").value)
         if self._sphere is None or self._target is None or self._tool0 is None:
             return False
         try:
@@ -299,6 +314,7 @@ class SphereMotionNode(Node):
                 f"red sphere motion=oblique angle={angle:.1f} deg "
                 f"from the tool0-target line, speed={speed:.3f} m/s"
             )
+        self._configured = True
         return True
 
     def _lookup_tool0(self) -> Vec3 | None:
