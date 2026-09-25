@@ -23,4 +23,9 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_dynamics test/test_dynamics.py)
+endif()
+
 ament_package()

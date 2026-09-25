@@ -42,11 +42,15 @@ class ArmDynamics:
         kd: Sequence[float],
         effort_limits: Sequence[float],
     ) -> list[float]:
-        """Return tau = g + C + Kp e + Kd (qdot_des - qdot), clipped to limits."""
+        """Return tau = g + C + M (Kp e + Kd (qdot_des - qdot)), clipped to limits.
+
+        Kp and Kd are acceleration gains. Wrist inertia is about 1e-3 kg·m², so
+        adding Kp e + Kd edot directly as torque makes the 500 Hz step unstable
+        and the wrist torque changes sign every tick.
+        """
         count = len(self.joint_names)
         joints = self._joint_array(positions)
         joint_vel = self._joint_array(velocities)
-        desired_vel = self._joint_array(desired_velocities)
 
         gravity = PyKDL.JntArray(count)
         if self._dyn.JntToGravity(joints, gravity) < 0:
@@ -56,16 +60,22 @@ class ArmDynamics:
         if self._dyn.JntToCoriolis(joints, joint_vel, coriolis) < 0:
             raise RuntimeError("coriolis torques failed")
 
+        mass = PyKDL.JntSpaceInertiaMatrix(count)
+        if self._dyn.JntToMass(joints, mass) < 0:
+            raise RuntimeError("inertia matrix failed")
+
+        accelerations = [
+            float(kp[index]) * (float(desired[index]) - float(positions[index]))
+            + float(kd[index])
+            * (float(desired_velocities[index]) - float(velocities[index]))
+            for index in range(count)
+        ]
         torques: list[float] = []
         for index in range(count):
-            error = float(desired[index]) - float(positions[index])
-            velocity_error = float(desired_vel[index]) - float(velocities[index])
-            torque = (
-                float(gravity[index])
-                + float(coriolis[index])
-                + float(kp[index]) * error
-                + float(kd[index]) * velocity_error
+            inertial = sum(
+                mass[index, column] * accelerations[column] for column in range(count)
             )
+            torque = float(gravity[index]) + float(coriolis[index]) + inertial
             limit = float(effort_limits[index])
             torques.append(max(-limit, min(limit, torque)))
         return torques

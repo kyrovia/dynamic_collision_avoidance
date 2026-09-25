@@ -53,7 +53,7 @@ class ComputedTorqueNode(Node):
         )
         self._dynamics: ArmDynamics | None = None
         self._positions: dict[str, float] = {}
-        self._velocities: dict[str, float] = {}
+        self._measured_velocity = [0.0] * len(ARM_JOINTS)
         self._desired: list[float] | None = None
         self._desired_velocities: list[float] | None = None
         self._prev_desired: list[float] | None = None
@@ -95,15 +95,18 @@ class ComputedTorqueNode(Node):
 
     def _on_joint_states(self, message: JointState) -> None:
         try:
-            self._positions = dict(zip(message.name, message.position))
-            if message.velocity:
-                self._velocities = dict(zip(message.name, message.velocity))
-            else:
-                self._velocities = dict.fromkeys(message.name, 0.0)
+            positions = dict(zip(message.name, message.position))
         except (TypeError, ValueError) as exc:
             self.get_logger().error(
                 f"invalid joint state: {exc}", throttle_duration_sec=2.0
             )
+            return
+        self._positions = positions
+        if any(name not in positions for name in ARM_JOINTS):
+            return
+        current = [positions[name] for name in ARM_JOINTS]
+        # /joint_states velocity sits near ±pi on a slow wrist. Differentiate position.
+        self._measured_velocity = self._velocity_from_positions(current)
 
     def _on_trajectory(self, message: JointTrajectory) -> None:
         try:
@@ -178,7 +181,7 @@ class ComputedTorqueNode(Node):
             return
 
         positions = [self._positions[name] for name in ARM_JOINTS]
-        velocities = self._measured_velocities(positions)
+        velocities = self._measured_velocity
         desired = self._desired if self._desired is not None else positions
         desired_velocities = (
             self._desired_velocities
@@ -205,24 +208,19 @@ class ComputedTorqueNode(Node):
 
         self._publish_effort(torques)
 
-    def _measured_velocities(self, positions: list[float]) -> list[float]:
-        """Differentiate wrapped joint positions; Gazebo /joint_states velocity lies near ±pi."""
+    def _velocity_from_positions(self, positions: list[float]) -> list[float]:
+        """Speed from successive positions. A repeated sample keeps the last speed."""
         now = self.get_clock().now()
-        if (
-            self._prev_measured is not None
-            and self._prev_measured_time is not None
-        ):
+        if self._prev_measured is not None and self._prev_measured_time is not None:
             dt = (now - self._prev_measured_time).nanoseconds * 1e-9
-            if dt > 1e-6:
-                velocities = [
-                    _wrap_joint_delta(current - previous) / dt
-                    for current, previous in zip(positions, self._prev_measured)
-                ]
-            else:
-                velocities = [0.0] * len(ARM_JOINTS)
+            if dt <= 1e-6:
+                return self._measured_velocity
+            velocities = [
+                _wrap_joint_delta(current - previous) / dt
+                for current, previous in zip(positions, self._prev_measured)
+            ]
         else:
-            velocities = [self._velocities.get(name, 0.0) for name in ARM_JOINTS]
-
+            velocities = [0.0] * len(ARM_JOINTS)
         self._prev_measured = list(positions)
         self._prev_measured_time = now
         return velocities

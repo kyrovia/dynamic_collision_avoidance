@@ -5,6 +5,7 @@ computed_torque_node:
     control_rate: 500.0
     trajectory_topic: /joint_trajectory_controller/joint_trajectory
     effort_topic: /effort_controller/commands
+    # Acceleration gains, rad/s^2 per rad and 1/s. Torque is M(q) times this PD.
     kp: [800.0, 800.0, 400.0, 200.0, 200.0, 200.0]
     kd: [40.0, 40.0, 20.0, 10.0, 10.0, 10.0]
     effort_limits: [330.0, 330.0, 150.0, 54.0, 54.0, 54.0]
