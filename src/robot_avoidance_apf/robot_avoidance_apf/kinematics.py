@@ -35,9 +35,17 @@ class ArmKinematics:
         twist: Sequence[float],
         dt: float,
         damping: float,
+        k_lim: float = 0.0,
+        rho_lim: float = 0.3,
+        qdot_lim: float = 0.5,
     ) -> tuple[list[float], list[float]]:
         jacobian = self._numeric_jacobian(positions)
         velocity = damped_least_squares(jacobian, np.asarray(twist, dtype=float), damping)
+        # A 6-DoF arm has no null space when J is full rank, so the limit
+        # field is added in joint space. The clamp below still cannot be crossed.
+        velocity = velocity + joint_limit_velocity(
+            positions, self.limits, k_lim, rho_lim, qdot_lim
+        )
         stepped: list[float] = []
         effective: list[float] = []
         for index, position in enumerate(positions):
@@ -76,6 +84,41 @@ def damped_least_squares(jacobian: np.ndarray, twist: np.ndarray, damping: float
     rows = jacobian.shape[0]
     gram = jacobian @ jacobian.T + (damping * damping) * np.eye(rows)
     return jacobian.T @ np.linalg.solve(gram, twist)
+
+
+def joint_limit_velocity(
+    positions: Sequence[float],
+    limits: Sequence[tuple[float, float]],
+    k_lim: float,
+    rho: float,
+    qdot_max: float,
+) -> np.ndarray:
+    """Repulsive joint velocity from U = 1/2 k (1/δ − 1/ρ)^2 when δ < ρ.
+
+    δ is the distance to one bound. The speed is −dU/dq, clipped so the
+    1/δ^2 singularity stays finite. Continuous joints (infinite limits) are skipped.
+    """
+    velocity = np.zeros(len(positions))
+    if k_lim == 0.0 or rho <= 0.0:
+        return velocity
+    for index, position in enumerate(positions):
+        lower, upper = limits[index]
+        push = 0.0
+        if math.isfinite(lower):
+            push += _limit_push(float(position) - lower, k_lim, rho)
+        if math.isfinite(upper):
+            push -= _limit_push(upper - float(position), k_lim, rho)
+        velocity[index] = max(-qdot_max, min(qdot_max, push))
+    return velocity
+
+
+def _limit_push(delta: float, k_lim: float, rho: float) -> float:
+    """Positive speed that increases clearance to one bound."""
+    if delta >= rho:
+        return 0.0
+    # Floor the clearance so a joint sitting on the bound does not blow up.
+    safe = max(delta, 1e-3)
+    return k_lim * (1.0 / safe - 1.0 / rho) / (safe * safe)
 
 
 def chain_from_urdf(

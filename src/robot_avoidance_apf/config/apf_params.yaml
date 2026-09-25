@@ -13,6 +13,11 @@ apf_node:
     v_max: 0.04
     omega_max: 0.3
 
+    # Joint-limit potential: U = 1/2 k (1/δ - 1/ρ)^2 for δ < ρ (rad)
+    k_lim: 0.005
+    rho_lim: 0.30
+    qdot_lim: 0.5
+
     # Joint-space integration and goal check
     damping: 0.05
     control_rate: 50.0

@@ -108,6 +108,9 @@ class ApfNode(Node):
         self.declare_parameter("trajectory_horizon", 0.1)
         self.declare_parameter("position_tolerance", 0.01)
         self.declare_parameter("orientation_tolerance", 0.05)
+        self.declare_parameter("k_lim", 0.005)
+        self.declare_parameter("rho_lim", 0.30)
+        self.declare_parameter("qdot_lim", 0.5)
 
         goal_position, goal_orientation, radius = load_goal_and_radius(
             Path(self.get_parameter("world").get_parameter_value().string_value)
@@ -212,7 +215,11 @@ class ApfNode(Node):
             (*command.linear, *command.angular),
             horizon,
             damping,
+            k_lim=float(self.get_parameter("k_lim").value),
+            rho_lim=float(self.get_parameter("rho_lim").value),
+            qdot_lim=float(self.get_parameter("qdot_lim").value),
         )
+        self._log_joint_limits(positions)
         self._publish(commanded, joint_velocities)
         speed = math.sqrt(sum(value * value for value in command.linear))
         pos_err, ori_err = self._goal_errors(pose, orientation)
@@ -221,6 +228,25 @@ class ApfNode(Node):
             f"pos_err {pos_err:.4f} m, ori_err {ori_err:.4f} rad",
             throttle_duration_sec=2.0,
         )
+
+    def _log_joint_limits(self, positions: list[float]) -> None:
+        if self._kinematics is None:
+            return
+        rho = float(self.get_parameter("rho_lim").value)
+        if rho <= 0.0:
+            return
+        near: list[str] = []
+        for name, position, (lower, upper) in zip(
+            self._kinematics.joint_names, positions, self._kinematics.limits
+        ):
+            margin = min(position - lower, upper - position)
+            if margin < rho:
+                near.append(f"{name} {margin:.3f} rad")
+        if near:
+            self.get_logger().info(
+                "near joint limit: " + ", ".join(near),
+                throttle_duration_sec=2.0,
+            )
 
     def _arm_positions(self) -> list[float] | None:
         if self._kinematics is None:

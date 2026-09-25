@@ -2,7 +2,7 @@
 
 import math
 
-from robot_avoidance_apf.kinematics import ArmKinematics
+from robot_avoidance_apf.kinematics import ArmKinematics, joint_limit_velocity
 
 URDF = """
 <robot name="arm">
@@ -42,6 +42,42 @@ def test_joint_limit_stops_further_motion() -> None:
     # Positive y velocity rotates joint1 positive, which the upper limit forbids.
     held, _ = arm.integrate([0.0], [0.0, 0.5, 0.0, 0.0, 0.0, 0.0], dt=1.0, damping=0.05)
     assert held[0] == 0.0
+
+
+def test_joint_limit_velocity_is_zero_away_from_bounds() -> None:
+    velocity = joint_limit_velocity(
+        [-0.5], [(-1.0, 0.0)], k_lim=0.01, rho=0.2, qdot_max=0.5
+    )
+    assert velocity[0] == 0.0
+
+
+def test_joint_limit_velocity_pushes_away_from_each_bound() -> None:
+    upper = joint_limit_velocity(
+        [-0.05], [(-1.0, 0.0)], k_lim=0.01, rho=0.2, qdot_max=0.5
+    )
+    lower = joint_limit_velocity(
+        [-0.95], [(-1.0, 0.0)], k_lim=0.01, rho=0.2, qdot_max=0.5
+    )
+    assert upper[0] < 0.0
+    assert lower[0] > 0.0
+    assert abs(upper[0]) <= 0.5
+    assert abs(lower[0]) <= 0.5
+
+
+def test_integrate_joint_limit_field_leaves_the_bound() -> None:
+    arm = ArmKinematics(URDF, "base", "tool")
+    stepped, velocities = arm.integrate(
+        [0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        dt=0.1,
+        damping=0.05,
+        k_lim=0.01,
+        rho_lim=0.2,
+        qdot_lim=0.5,
+    )
+    assert stepped[0] < 0.0
+    assert stepped[0] >= -1.0
+    assert velocities[0] < 0.0
 
 
 def _close(actual: tuple[float, float, float], expected: tuple[float, float, float]) -> bool:
