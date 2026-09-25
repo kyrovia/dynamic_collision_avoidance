@@ -38,14 +38,14 @@
         <collision name="collision">
           <geometry>
             <sphere>
-              <radius>0.063</radius>
+              <radius>0.0315</radius>
             </sphere>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
             <sphere>
-              <radius>0.063</radius>
+              <radius>0.0315</radius>
             </sphere>
           </geometry>
           <material>

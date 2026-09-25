@@ -34,6 +34,9 @@ def launch_setup(context, *args, **kwargs):
     controllers_file = PathJoinSubstitution(
         [FindPackageShare("robot_sim"), "config", "ur_controllers.yaml"]
     )
+    computed_torque_params = PathJoinSubstitution(
+        [FindPackageShare("robot_sim"), "config", "computed_torque.yaml"]
+    )
     gz_sim = PathJoinSubstitution(
         [FindPackageShare("ros_gz_sim"), "launch", "gz_sim.launch.py"]
     )
@@ -43,7 +46,7 @@ def launch_setup(context, *args, **kwargs):
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
             PathJoinSubstitution(
-                [FindPackageShare("ur_description"), "urdf", "ur.urdf.xacro"]
+                [FindPackageShare("robot_sim"), "urdf", "ur_sim.urdf.xacro"]
             ),
             " ",
             "name:=ur",
@@ -79,15 +82,27 @@ def launch_setup(context, *args, **kwargs):
             "/controller_manager",
         ],
     )
-    joint_trajectory_controller_spawner = Node(
+    effort_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_trajectory_controller", "-c", "/controller_manager"],
+        arguments=["effort_controller", "-c", "/controller_manager"],
     )
-    delay_joint_trajectory_controller = RegisterEventHandler(
+    delay_effort_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
-            on_exit=[joint_trajectory_controller_spawner],
+            on_exit=[effort_controller_spawner],
+        )
+    )
+    computed_torque_node = Node(
+        package="robot_sim",
+        executable="computed_torque_node",
+        output="screen",
+        parameters=[computed_torque_params, {"use_sim_time": True}],
+    )
+    delay_computed_torque = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=effort_controller_spawner,
+            on_exit=[computed_torque_node],
         )
     )
 
@@ -147,7 +162,8 @@ def launch_setup(context, *args, **kwargs):
     return [
         robot_state_publisher,
         joint_state_broadcaster_spawner,
-        delay_joint_trajectory_controller,
+        delay_effort_controller,
+        delay_computed_torque,
         spawn_robot,
         gz_with_gui,
         gz_headless,

@@ -1,28 +1,43 @@
+# bug1：位置不变，但仍发送期望末端速度
+```
 [apf_node]: clearance 0.193 m, speed 0.080 m/s
 [apf_node]: clearance 0.193 m, speed 0.080 m/s
 [apf_node]: clearance 0.193 m, speed 0.080 m/s
-位置不变，但仍发送期望末端速度
+```
 
-机械臂停止条件
+![bug1 现象截图](../../../assets/bug1.png)
+
+## 机械臂停止条件
+
 - 到达
 - 末端到障碍物的安全距离 < d_min
--- 此时打印tool0 clearance ... is inside the stop distance 且期望速度为0
+  - 此时打印tool0 clearance ... is inside the stop distance 且期望速度为0
 - 缺少以下任何数据：
--- /robot_description
--- /joint_states
--- /obstacle/pose
+  - /robot_description
+  - /joint_states
+  - /obstacle/pose
 - 触发关节限位
 - joint_trajectory_controller没activate
 
+## 排查过程
 
+```bash
 ros2 control list_controllers
+```
+
 控制器activate
 
+```bash
 ros2 topic hz /joint_trajectory_controller/joint_trajectory
+```
+
 有消息往控制器发
 
-
+```bash
 ros2 topic echo /joint_states
+```
+
+```
 header:
   stamp:
     sec: 39
@@ -56,9 +71,16 @@ effort:
 - -3.4178286509286537
 - 0.004427541788830281
 - 7.513306096419399e-15
+```
 
+```bash
 ros2 topic echo /joint_trajectory_controller/joint_trajectory
+```
+
+## 结论
 
 发现apf有给目标，但力矩顶满了，电机给不出速度，末端姿态不变，apf持续发送目标，但是不动
 
 实测发现，current和target只差0.008，但是产生了330的力矩，说明可能没补偿重力
+
+位置控制器换成重力前馈+PD力矩控制，问题解决

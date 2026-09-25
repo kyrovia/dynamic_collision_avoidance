@@ -10,8 +10,8 @@ apf_node:
     k_ori: 1.0
     d0: 0.20
     d_min: 0.03
-    v_max: 0.08
-    omega_max: 0.5
+    v_max: 0.04
+    omega_max: 0.3
 
     # Joint-space integration and goal check
     damping: 0.05
