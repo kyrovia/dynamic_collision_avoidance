@@ -1,0 +1,15 @@
+obstacle_cloud_node:
+  ros__parameters:
+    # RealSense publishes this cloud only while someone is subscribed.
+    # The topic name contains "color", but the points are in camera_depth_optical_frame.
+    input_topic: /camera/camera/depth/color/points
+    output_topic: obstacle_cloud
+
+    # Statistical outlier removal, applied before the AABB crop.
+    mean_k: 50
+    stddev_mul: 1.0
+
+    # AABB in meters, in the camera optical frame.
+    x: [-7.0, 1.0]
+    y: [-2.0, 1.0]
+    z: [0.6, 7.0]

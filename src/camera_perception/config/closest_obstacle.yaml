@@ -1,0 +1,6 @@
+closest_obstacle_node:
+  ros__parameters:
+    cloud_topic: obstacle_cloud
+    closest_topic: closest_obstacle
+    # The cloud is expressed in the depth optical frame. Its origin is the camera.
+    frame_id: camera_depth_optical_frame

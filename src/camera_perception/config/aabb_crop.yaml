@@ -1,0 +1,18 @@
+# Paths are relative to this file.
+input_pcd: ../data/obs1.pcd
+output_pcd: ../data/obs1_cropped.pcd
+# Cloud after statistical outlier removal, before the AABB crop.
+filtered_pcd: ../data/obs1_filtered.pcd
+
+# Statistical outlier removal, applied before the AABB crop.
+# A point is removed when its mean distance to mean_k neighbors
+# exceeds the cloud mean by stddev_mul standard deviations.
+mean_k: 50
+stddev_mul: 1.0
+
+# AABB in meters, applied in the input cloud frame.
+# Provisional UR16e workspace in base_link: the axis-aligned box around a
+#在末端坐标系下，机械臂臂展围成的工作空间
+x: [-7.000, 1.000]
+y: [-2.000, 1.000]
+z: [0.600, 7.000]
