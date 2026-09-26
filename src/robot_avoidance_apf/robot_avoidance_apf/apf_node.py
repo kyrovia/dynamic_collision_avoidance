@@ -11,13 +11,14 @@ from ament_index_python.packages import (
     PackageNotFoundError,
     get_package_share_directory,
 )
-from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import PoseStamped
+from builtin_interfaces.msg import Duration, Time
+from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion, Vector3
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
-from std_msgs.msg import String
+from std_msgs.msg import ColorRGBA, String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from visualization_msgs.msg import Marker, MarkerArray
 
 from robot_avoidance_apf.apf import (
     ApfParams,
@@ -25,7 +26,14 @@ from robot_avoidance_apf.apf import (
     field_command,
     orientation_angle,
 )
-from robot_avoidance_apf.kinematics import ArmKinematics
+from robot_avoidance_apf.capsules import (
+    AvoidanceCommand,
+    CapsuleDraw,
+    avoidance_velocity,
+    capsule_draws,
+    link_radius,
+)
+from robot_avoidance_apf.kinematics import ArmKinematics, BodySegment
 
 ARM_JOINTS = (
     "shoulder_pan_joint",
@@ -80,6 +88,40 @@ def quaternion_from_rpy(
     )
 
 
+def _marker(
+    marker_id: int,
+    kind: int,
+    position: tuple[float, float, float],
+    draw: CapsuleDraw,
+    frame: str,
+    stamp: Time,
+    color: ColorRGBA,
+) -> Marker:
+    marker = Marker()
+    marker.header.frame_id = frame
+    marker.header.stamp = stamp
+    marker.ns = "capsules"
+    marker.id = marker_id
+    marker.type = kind
+    marker.action = Marker.ADD
+    marker.pose = Pose(
+        position=Point(x=position[0], y=position[1], z=position[2]),
+        orientation=Quaternion(
+            x=draw.orientation[0],
+            y=draw.orientation[1],
+            z=draw.orientation[2],
+            w=draw.orientation[3],
+        ),
+    )
+    diameter = 2.0 * draw.radius
+    if kind == Marker.CYLINDER:
+        marker.scale = Vector3(x=diameter, y=diameter, z=draw.length)
+    else:
+        marker.scale = Vector3(x=diameter, y=diameter, z=diameter)
+    marker.color = color
+    return marker
+
+
 def duration_from_seconds(seconds: float) -> Duration:
     whole = int(seconds)
     nanos = int(round((seconds - whole) * 1e9))
@@ -96,7 +138,7 @@ class ApfNode(Node):
         self.declare_parameter("base_link", "base_link")
         self.declare_parameter("tip_link", "tool0")
         self.declare_parameter("k_att", 1.0)
-        self.declare_parameter("k_rep", 0.02)
+        self.declare_parameter("k_rep", 0.15)
         self.declare_parameter("k_tan", 0.04)
         self.declare_parameter("k_ori", 1.0)
         self.declare_parameter("d0", 0.20)
@@ -111,6 +153,14 @@ class ApfNode(Node):
         self.declare_parameter("k_lim", 0.005)
         self.declare_parameter("rho_lim", 0.30)
         self.declare_parameter("qdot_lim", 0.5)
+        self.declare_parameter("link_avoidance", True)
+        self.declare_parameter("k_self", 0.15)
+        self.declare_parameter("self_d0", 0.03)
+        self.declare_parameter("self_d_min", 0.005)
+        self.declare_parameter("capsule_radius", 0.05)
+        self.declare_parameter("wrist_radius", 0.03)
+        self.declare_parameter("base_radius", 0.08)
+        self.declare_parameter("qdot_avoid", 0.5)
 
         goal_position, goal_orientation, radius = load_goal_and_radius(
             Path(self.get_parameter("world").get_parameter_value().string_value)
@@ -132,6 +182,7 @@ class ApfNode(Node):
         self._trajectory = self.create_publisher(
             JointTrajectory, "/joint_trajectory_controller/joint_trajectory", 10
         )
+        self._capsules = self.create_publisher(MarkerArray, "/apf/capsules", 10)
         self.create_subscription(String, "/robot_description", self._on_description, latched)
         self.create_subscription(JointState, "/joint_states", self._on_joint_states, 10)
         self.create_subscription(PoseStamped, "/obstacle/pose", self._on_obstacle, 10)
@@ -183,6 +234,22 @@ class ApfNode(Node):
             )
             return
 
+        segments, axes = self._kinematics.body(positions)
+        radii = self._capsule_radii(segments)
+        self._publish_capsules(segments, radii)
+        avoidance = avoidance_velocity(
+            segments,
+            axes,
+            SphereObstacle(self._obstacle, self._radius),
+            radii,
+            k_rep=float(self.get_parameter("k_rep").value),
+            d0=float(self.get_parameter("d0").value),
+            d_min=float(self.get_parameter("d_min").value),
+            k_self=float(self.get_parameter("k_self").value),
+            self_d0=float(self.get_parameter("self_d0").value),
+            self_d_min=float(self.get_parameter("self_d_min").value),
+            qdot_max=float(self.get_parameter("qdot_avoid").value),
+        )
         pose, orientation = self._kinematics.pose(positions)
         command = field_command(
             pose,
@@ -192,9 +259,10 @@ class ApfNode(Node):
             SphereObstacle(self._obstacle, self._radius),
             self._params(),
         )
-        if command.hold:
+        link_avoidance = bool(self.get_parameter("link_avoidance").value)
+        if (link_avoidance and avoidance.hold) or command.hold:
             self.get_logger().error(
-                f"tool0 clearance {command.clearance:.3f} m is inside the stop distance",
+                self._stop_reason(command.clearance, avoidance),
                 throttle_duration_sec=1.0,
             )
             self._publish(positions)
@@ -218,13 +286,16 @@ class ApfNode(Node):
             k_lim=float(self.get_parameter("k_lim").value),
             rho_lim=float(self.get_parameter("rho_lim").value),
             qdot_lim=float(self.get_parameter("qdot_lim").value),
+            extra_velocity=avoidance.velocity if link_avoidance else None,
         )
         self._log_joint_limits(positions)
         self._publish(commanded, joint_velocities)
         speed = math.sqrt(sum(value * value for value in command.linear))
         pos_err, ori_err = self._goal_errors(pose, orientation)
         self.get_logger().info(
-            f"clearance {command.clearance:.3f} m, speed {speed:.3f} m/s, "
+            f"tool {command.clearance:.3f} m, "
+            f"link {avoidance.obstacle_clearance:.3f} m, "
+            f"self {avoidance.self_clearance:.3f} m, speed {speed:.3f} m/s, "
             f"pos_err {pos_err:.4f} m, ori_err {ori_err:.4f} rad",
             throttle_duration_sec=2.0,
         )
@@ -247,6 +318,47 @@ class ApfNode(Node):
                 "near joint limit: " + ", ".join(near),
                 throttle_duration_sec=2.0,
             )
+
+    def _stop_reason(self, tool_clearance: float, avoidance: AvoidanceCommand) -> str:
+        d_min = float(self.get_parameter("d_min").value)
+        self_d_min = float(self.get_parameter("self_d_min").value)
+        if avoidance.obstacle_clearance < d_min:
+            return (
+                f"link clearance {avoidance.obstacle_clearance:.3f} m "
+                "is inside the stop distance"
+            )
+        if avoidance.self_clearance < self_d_min:
+            return (
+                f"self clearance {avoidance.self_clearance:.3f} m "
+                "is inside the stop distance"
+            )
+        return f"tool0 clearance {tool_clearance:.3f} m is inside the stop distance"
+
+    def _capsule_radii(self, segments: tuple[BodySegment, ...]) -> list[float]:
+        arm = float(self.get_parameter("capsule_radius").value)
+        wrist = float(self.get_parameter("wrist_radius").value)
+        base = float(self.get_parameter("base_radius").value)
+        return [link_radius(segment.name, arm, wrist, base) for segment in segments]
+
+    def _publish_capsules(
+        self, segments: tuple[BodySegment, ...], radii: list[float]
+    ) -> None:
+        frame = str(self.get_parameter("base_link").value)
+        stamp = self.get_clock().now().to_msg()
+        color = ColorRGBA(r=0.15, g=0.75, b=0.9, a=0.35)
+        message = MarkerArray()
+        for index, draw in enumerate(capsule_draws(segments, radii)):
+            base = index * 3
+            message.markers.append(
+                _marker(base, Marker.CYLINDER, draw.center, draw, frame, stamp, color)
+            )
+            message.markers.append(
+                _marker(base + 1, Marker.SPHERE, draw.start, draw, frame, stamp, color)
+            )
+            message.markers.append(
+                _marker(base + 2, Marker.SPHERE, draw.end, draw, frame, stamp, color)
+            )
+        self._capsules.publish(message)
 
     def _arm_positions(self) -> list[float] | None:
         if self._kinematics is None:

@@ -1,4 +1,9 @@
-"""Cartesian artificial potential field for one spherical obstacle."""
+"""Cartesian artificial potential field for the tool.
+
+Link capsules own the normal push away from the sphere. The tool keeps
+attraction, orientation, and a tangential term so it can slide around
+the sphere on the way to the goal.
+"""
 
 import math
 from dataclasses import dataclass
@@ -85,20 +90,19 @@ def _repulsion(
     # Clearance is at least d_min here, so the singularity at the surface is outside this branch.
     normal = _scale(offset, 1.0 / distance)
     strength = (1.0 / gap - 1.0 / params.d0) / (gap * gap)
-    radial = _scale(normal, params.k_rep * strength)
 
     toward_goal = _sub(goal_position, position)
     tangent = _reject(toward_goal, normal)
     if _norm(tangent) < 1e-6:
-        # The obstacle sits on the line to the goal, so the radial term cancels attraction.
+        # The obstacle sits on the line to the goal, so attraction is straight into it.
         tangent = _perpendicular_unit(normal)
     else:
         tangent = _unit(tangent)
     tangential = _scale(tangent, params.k_tan * strength)
 
     # The scene goal lies inside the influence radius. Scaling by goal distance
-    # keeps that point an equilibrium instead of a permanent push away from the sphere.
-    return _scale(_add(radial, tangential), _norm(toward_goal))
+    # keeps that point an equilibrium instead of a permanent slide around the sphere.
+    return _scale(tangential, _norm(toward_goal))
 
 
 def _orientation_error(current: Quat, goal: Quat) -> Vec3:

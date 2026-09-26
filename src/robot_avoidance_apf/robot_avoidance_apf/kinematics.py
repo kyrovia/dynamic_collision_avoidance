@@ -3,12 +3,34 @@
 import math
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import PyKDL
 
 Vec3 = tuple[float, float, float]
 Quat = tuple[float, float, float, float]
+
+# Shoulder_lift sits on shoulder_pan, and the flange frames have no translation.
+_MIN_SEGMENT_LENGTH = 1e-4
+
+
+@dataclass(frozen=True)
+class JointAxis:
+    """Movable joint origin and unit axis, expressed in the base frame."""
+
+    origin: Vec3
+    direction: Vec3
+
+
+@dataclass(frozen=True)
+class BodySegment:
+    """Rigid link centerline. joint_count is how many leading joints move it."""
+
+    name: str
+    start: Vec3
+    end: Vec3
+    joint_count: int
 
 
 class ArmKinematics:
@@ -17,6 +39,7 @@ class ArmKinematics:
     def __init__(self, urdf: str, base_link: str, tip_link: str) -> None:
         # Solvers keep a raw pointer to the chain, so the chain has to stay alive.
         self._chain, names, limits = chain_from_urdf(urdf, base_link, tip_link)
+        self.base_link = base_link
         self.joint_names = names
         self.limits = limits
         self._fk = PyKDL.ChainFkSolverPos_recursive(self._chain)
@@ -29,6 +52,46 @@ class ArmKinematics:
         position = (frame.p.x(), frame.p.y(), frame.p.z())
         return position, frame.M.GetQuaternion()
 
+    def body(
+        self, positions: Sequence[float]
+    ) -> tuple[tuple[BodySegment, ...], tuple[JointAxis, ...]]:
+        """Link centerlines and joint axes at this configuration.
+
+        A capsule uses the centerline between consecutive frames. Zero-length
+        frames are dropped so a joint that shares its parent's origin does not
+        become a capsule of length zero.
+        """
+        joints = self._joints(positions)
+        waypoints: list[tuple[Vec3, int, str]] = [((0.0, 0.0, 0.0), 0, self.base_link)]
+        axes: list[JointAxis] = []
+        frame = PyKDL.Frame.Identity()
+        link_name = self.base_link
+        joint_index = 0
+        for segment_index in range(self._chain.getNrOfSegments()):
+            segment = self._chain.getSegment(segment_index)
+            joint = segment.getJoint()
+            if joint.getType() == PyKDL.Joint.Fixed:
+                frame = frame * segment.pose(0.0)
+                link_name = segment.getName()
+                _append_waypoint(waypoints, _xyz(frame.p), joint_index, link_name)
+                continue
+            origin = frame * joint.JointOrigin()
+            axis = frame.M * joint.JointAxis()
+            _append_waypoint(waypoints, _xyz(origin), joint_index, link_name)
+            axes.append(JointAxis(_xyz(origin), _unit_xyz(axis)))
+            frame = frame * segment.pose(joints[joint_index])
+            joint_index += 1
+            link_name = segment.getName()
+            _append_waypoint(waypoints, _xyz(frame.p), joint_index, link_name)
+        if joint_index != len(self.joint_names):
+            raise RuntimeError("body walk did not visit every movable joint")
+        segments: list[BodySegment] = []
+        for index in range(len(waypoints) - 1):
+            start, _, _ = waypoints[index]
+            end, joint_count, name = waypoints[index + 1]
+            segments.append(BodySegment(name, start, end, joint_count))
+        return tuple(segments), tuple(axes)
+
     def integrate(
         self,
         positions: Sequence[float],
@@ -38,6 +101,7 @@ class ArmKinematics:
         k_lim: float = 0.0,
         rho_lim: float = 0.3,
         qdot_lim: float = 0.5,
+        extra_velocity: Sequence[float] | None = None,
     ) -> tuple[list[float], list[float]]:
         jacobian = self._numeric_jacobian(positions)
         velocity = damped_least_squares(jacobian, np.asarray(twist, dtype=float), damping)
@@ -46,6 +110,8 @@ class ArmKinematics:
         velocity = velocity + joint_limit_velocity(
             positions, self.limits, k_lim, rho_lim, qdot_lim
         )
+        if extra_velocity is not None:
+            velocity = velocity + np.asarray(extra_velocity, dtype=float)
         stepped: list[float] = []
         effective: list[float] = []
         for index, position in enumerate(positions):
@@ -77,6 +143,36 @@ class ArmKinematics:
         for index, position in enumerate(positions):
             array[index] = position
         return array
+
+
+def _append_waypoint(
+    waypoints: list[tuple[Vec3, int, str]],
+    position: Vec3,
+    joint_count: int,
+    name: str,
+) -> None:
+    if waypoints:
+        previous = waypoints[-1][0]
+        offset = (
+            position[0] - previous[0],
+            position[1] - previous[1],
+            position[2] - previous[2],
+        )
+        if offset[0] ** 2 + offset[1] ** 2 + offset[2] ** 2 < _MIN_SEGMENT_LENGTH**2:
+            return
+    waypoints.append((position, joint_count, name))
+
+
+def _xyz(vector: PyKDL.Vector) -> Vec3:
+    return (vector.x(), vector.y(), vector.z())
+
+
+def _unit_xyz(vector: PyKDL.Vector) -> Vec3:
+    position = _xyz(vector)
+    length = math.sqrt(position[0] ** 2 + position[1] ** 2 + position[2] ** 2)
+    if length < 1e-9:
+        raise ValueError("joint axis has zero length")
+    return (position[0] / length, position[1] / length, position[2] / length)
 
 
 def damped_least_squares(jacobian: np.ndarray, twist: np.ndarray, damping: float) -> np.ndarray:

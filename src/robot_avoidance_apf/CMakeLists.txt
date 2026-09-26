@@ -7,10 +7,12 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
 install(
-  PROGRAMS robot_avoidance_apf/apf_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME apf_node
+    PROGRAMS robot_avoidance_apf/apf_node.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME apf_node
 )
+
+
 
 install(
   DIRECTORY config launch
@@ -27,6 +29,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
   ament_add_pytest_test(test_apf test/test_apf.py)
   ament_add_pytest_test(test_kinematics test/test_kinematics.py)
+  ament_add_pytest_test(test_capsules test/test_capsules.py)
 endif()
 
 ament_package()

@@ -5,7 +5,6 @@ apf_node:
 
     # Artificial potential field
     k_att: 1.0
-    k_rep: 0.02
     k_tan: 0.04
     k_ori: 1.0
     d0: 0.20
@@ -17,6 +16,20 @@ apf_node:
     k_lim: 0.005
     rho_lim: 0.30
     qdot_lim: 0.5
+
+    # Temporary: false drops link repulsion and self-collision, including their stop.
+    link_avoidance: false
+
+    # CHOMP potential slope is in [0, 1]. Gains scale that slope into joint rate.
+    # Self influence stays inside the straight-arm wrist gap.
+    k_rep: 0.15
+    k_self: 0.15
+    self_d0: 0.03
+    self_d_min: 0.005
+    capsule_radius: 0.05
+    wrist_radius: 0.03
+    base_radius: 0.08
+    qdot_avoid: 0.5
 
     # Joint-space integration and goal check
     damping: 0.05
