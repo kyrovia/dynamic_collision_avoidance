@@ -142,7 +142,7 @@ class ApfNode(Node):
         self.declare_parameter("k_tan", 0.04)
         self.declare_parameter("k_ori", 1.0)
         self.declare_parameter("d0", 0.20)
-        self.declare_parameter("d_min", 0.03)
+        self.declare_parameter("d_min", 0.02)
         self.declare_parameter("v_max", 0.08)
         self.declare_parameter("omega_max", 0.5)
         self.declare_parameter("damping", 0.05)
@@ -154,9 +154,11 @@ class ApfNode(Node):
         self.declare_parameter("rho_lim", 0.30)
         self.declare_parameter("qdot_lim", 0.5)
         self.declare_parameter("link_avoidance", True)
+        self.declare_parameter("self_avoidance", True)
         self.declare_parameter("k_self", 0.15)
         self.declare_parameter("self_d0", 0.03)
         self.declare_parameter("self_d_min", 0.005)
+        self.declare_parameter("link_envelope_extra", 0.0)
         self.declare_parameter("capsule_radius", 0.05)
         self.declare_parameter("wrist_radius", 0.03)
         self.declare_parameter("base_radius", 0.08)
@@ -249,6 +251,10 @@ class ApfNode(Node):
             self_d0=float(self.get_parameter("self_d0").value),
             self_d_min=float(self.get_parameter("self_d_min").value),
             qdot_max=float(self.get_parameter("qdot_avoid").value),
+            self_avoidance=bool(self.get_parameter("self_avoidance").value),
+            link_envelope_extra=float(
+                self.get_parameter("link_envelope_extra").value
+            ),
         )
         pose, orientation = self._kinematics.pose(positions)
         command = field_command(
@@ -260,7 +266,7 @@ class ApfNode(Node):
             self._params(),
         )
         link_avoidance = bool(self.get_parameter("link_avoidance").value)
-        if (link_avoidance and avoidance.hold) or command.hold:
+        if avoidance.hold or command.hold:
             self.get_logger().error(
                 self._stop_reason(command.clearance, avoidance),
                 throttle_duration_sec=1.0,
@@ -292,10 +298,16 @@ class ApfNode(Node):
         self._publish(commanded, joint_velocities)
         speed = math.sqrt(sum(value * value for value in command.linear))
         pos_err, ori_err = self._goal_errors(pose, orientation)
+        min_clearance = min(
+            command.clearance,
+            avoidance.obstacle_clearance,
+            avoidance.self_clearance,
+        )
         self.get_logger().info(
             f"tool {command.clearance:.3f} m, "
             f"link {avoidance.obstacle_clearance:.3f} m, "
-            f"self {avoidance.self_clearance:.3f} m, speed {speed:.3f} m/s, "
+            f"self {avoidance.self_clearance:.3f} m, "
+            f"min {min_clearance:.3f} m, speed {speed:.3f} m/s, "
             f"pos_err {pos_err:.4f} m, ori_err {ori_err:.4f} rad",
             throttle_duration_sec=2.0,
         )
@@ -322,17 +334,26 @@ class ApfNode(Node):
     def _stop_reason(self, tool_clearance: float, avoidance: AvoidanceCommand) -> str:
         d_min = float(self.get_parameter("d_min").value)
         self_d_min = float(self.get_parameter("self_d_min").value)
-        if avoidance.obstacle_clearance < d_min:
+        gaps = {
+            "tool0": tool_clearance - d_min,
+            "link": avoidance.obstacle_clearance - d_min,
+            "self": avoidance.self_clearance - self_d_min,
+        }
+        worst = min(gaps, key=lambda name: gaps[name])
+        if worst == "tool0":
+            return (
+                f"tool0 clearance {tool_clearance:.3f} m "
+                "is inside the stop distance"
+            )
+        if worst == "link":
             return (
                 f"link clearance {avoidance.obstacle_clearance:.3f} m "
-                "is inside the stop distance"
+                "reached the obstacle box"
             )
-        if avoidance.self_clearance < self_d_min:
-            return (
-                f"self clearance {avoidance.self_clearance:.3f} m "
-                "is inside the stop distance"
-            )
-        return f"tool0 clearance {tool_clearance:.3f} m is inside the stop distance"
+        return (
+            f"self clearance {avoidance.self_clearance:.3f} m "
+            "is inside the stop distance"
+        )
 
     def _capsule_radii(self, segments: tuple[BodySegment, ...]) -> list[float]:
         arm = float(self.get_parameter("capsule_radius").value)

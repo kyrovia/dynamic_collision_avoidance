@@ -8,7 +8,9 @@ apf_node:
     k_tan: 0.04
     k_ori: 1.0
     d0: 0.20
-    d_min: 0.1
+    # Stop one integration step before contact: v_max * horizon = 4 mm.
+    d_min: 0.02
+    link_envelope_extra: 0.03
     v_max: 0.04
     omega_max: 0.3
 
@@ -17,8 +19,9 @@ apf_node:
     rho_lim: 0.30
     qdot_lim: 0.5
 
-    # Temporary: false drops link repulsion and self-collision, including their stop.
+    # false disables link repulsion velocity; stop still uses link clearance.
     link_avoidance: false
+    self_avoidance: true
 
     # CHOMP potential slope is in [0, 1]. Gains scale that slope into joint rate.
     # Self influence stays inside the straight-arm wrist gap.

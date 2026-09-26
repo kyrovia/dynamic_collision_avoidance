@@ -90,6 +90,8 @@ def avoidance_velocity(
     self_d0: float,
     self_d_min: float,
     qdot_max: float,
+    self_avoidance: bool = True,
+    link_envelope_extra: float = 0.0,
 ) -> AvoidanceCommand:
     """Push every moving link off the obstacle, and separate non-adjacent links.
 
@@ -103,10 +105,15 @@ def avoidance_velocity(
     velocity = np.zeros(count)
     obstacle_clearance = math.inf
     for segment, radius in zip(segments, radii):
-        gap, point, normal = _sphere_gap(segment, radius, obstacle)
+        gap, point, normal = _sphere_gap(
+            segment, radius, obstacle, link_envelope_extra
+        )
         if segment.joint_count == 0:
             continue
-        obstacle_clearance = min(obstacle_clearance, gap)
+        # Stop uses the sphere's axis-aligned box, not the round surface.
+        obstacle_clearance = min(
+            obstacle_clearance, _aabb_gap(segment, radius, obstacle)
+        )
         gain = k_rep * _potential_slope(gap, d0)
         if gain == 0.0:
             continue
@@ -122,6 +129,8 @@ def avoidance_velocity(
             radii[later],
         )
         self_clearance = min(self_clearance, gap)
+        if not self_avoidance:
+            continue
         gain = k_self * _potential_slope(gap, self_d0)
         if gain == 0.0:
             continue
@@ -133,7 +142,9 @@ def avoidance_velocity(
         jacobian_b = _point_jacobian(point_b, segments[later].joint_count, axes)
         velocity = velocity + jacobian_a.T @ push - jacobian_b.T @ push
 
-    hold = obstacle_clearance < d_min or self_clearance < self_d_min
+    hold = obstacle_clearance <= d_min or (
+        self_avoidance and self_clearance <= self_d_min
+    )
     if hold or qdot_max <= 0.0:
         velocity = np.zeros(count)
     else:
@@ -154,8 +165,82 @@ def _nonadjacent_pairs(count: int) -> list[tuple[int, int]]:
     ]
 
 
+def _aabb_gap(segment: BodySegment, radius: float, obstacle: SphereObstacle) -> float:
+    """Clearance from a link capsule to the sphere's axis-aligned box."""
+    center = _array(obstacle.center)
+    half = float(obstacle.radius)
+    low = center - half
+    high = center + half
+    distance = _segment_aabb_distance(
+        _array(segment.start), _array(segment.end), low, high
+    )
+    return distance - radius
+
+
+def _segment_aabb_distance(
+    start: np.ndarray, end: np.ndarray, low: np.ndarray, high: np.ndarray
+) -> float:
+    """Shortest distance from a segment to an axis-aligned box. Zero if they meet."""
+    if _segment_hits_aabb(start, end, low, high):
+        return 0.0
+    # Distance to a convex box is convex along the segment.
+    shrink = (math.sqrt(5.0) - 1.0) / 2.0
+
+    def distance_at(scale: float) -> float:
+        point = start + scale * (end - start)
+        closest = np.minimum(np.maximum(point, low), high)
+        return float(np.linalg.norm(point - closest))
+
+    left, right = 0.0, 1.0
+    mid_left = right - (right - left) * shrink
+    mid_right = left + (right - left) * shrink
+    dist_left = distance_at(mid_left)
+    dist_right = distance_at(mid_right)
+    for _ in range(60):
+        if dist_left < dist_right:
+            right = mid_right
+            mid_right = mid_left
+            dist_right = dist_left
+            mid_left = right - (right - left) * shrink
+            dist_left = distance_at(mid_left)
+        else:
+            left = mid_left
+            mid_left = mid_right
+            dist_left = dist_right
+            mid_right = left + (right - left) * shrink
+            dist_right = distance_at(mid_right)
+    return distance_at(0.5 * (left + right))
+
+
+def _segment_hits_aabb(
+    start: np.ndarray, end: np.ndarray, low: np.ndarray, high: np.ndarray
+) -> bool:
+    direction = end - start
+    enter = 0.0
+    leave = 1.0
+    for axis in range(3):
+        delta = float(direction[axis])
+        origin = float(start[axis])
+        if abs(delta) <= 1e-12:
+            if origin < float(low[axis]) or origin > float(high[axis]):
+                return False
+            continue
+        near = (float(low[axis]) - origin) / delta
+        far = (float(high[axis]) - origin) / delta
+        if near > far:
+            near, far = far, near
+        enter = max(enter, near)
+        leave = min(leave, far)
+        if enter > leave:
+            return False
+    return True
+
+
 def _sphere_gap(
-    segment: BodySegment, radius: float, obstacle: SphereObstacle
+    segment: BodySegment,
+    radius: float,
+    obstacle: SphereObstacle,
+    envelope_extra: float = 0.0,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     start = _array(segment.start)
     end = _array(segment.end)
@@ -163,7 +248,7 @@ def _sphere_gap(
     point = _closest_on_segment(start, end, center)
     offset = point - center
     distance = float(np.linalg.norm(offset))
-    gap = distance - obstacle.radius - radius
+    gap = distance - obstacle.radius - radius - envelope_extra
     if distance < 1e-9:
         normal = _perpendicular(end - start)
     else:

@@ -138,6 +138,21 @@ def test_sphere_clearance_and_push_use_the_closest_point() -> None:
     assert command.velocity[0] < 0.0
 
 
+def test_box_corner_holds_while_the_sphere_is_still_clear() -> None:
+    segment = BodySegment("arm", (1.0, 1.0, 0.0), (2.0, 1.0, 0.0), 1)
+    command = _avoid(
+        (segment,),
+        _one_axis(),
+        (0.0, 0.0, 0.0),
+        radii=(0.0,),
+        obstacle_radius=1.0,
+        d_min=0.0,
+    )
+    assert command.obstacle_clearance <= 1e-6
+    assert command.hold is True
+    assert command.velocity == (0.0,)
+
+
 def test_clearance_inside_stop_distance_holds() -> None:
     segment = BodySegment("arm", (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 1)
     command = _avoid(
